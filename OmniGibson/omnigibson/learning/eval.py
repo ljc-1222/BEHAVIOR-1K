@@ -22,6 +22,7 @@ from gello.robots.sim_robot.og_teleop_cfg import DISABLED_TRANSITION_RULES
 from hydra.utils import instantiate
 from inspect import getsourcefile
 from omegaconf import DictConfig, OmegaConf
+from omnigibson.learning.a2c2_online_metrics import A2C2OnlineMetricAccumulator
 from omnigibson.envs.env_wrapper import EnvironmentWrapper
 from omnigibson.learning.utils.config_utils import register_omegaconf_resolvers
 from omnigibson.learning.utils.eval_utils import (
@@ -86,6 +87,7 @@ class Evaluator:
         self.policy = self.load_policy()
         self.robot = self.load_robot()
         self.metrics = self.load_metrics()
+        self.a2c2_metrics = A2C2OnlineMetricAccumulator()
 
         self.reset()
         # manually reset environment episode number
@@ -204,6 +206,7 @@ class Evaluator:
             5. Invokes step callbacks for all registered metrics to update their state.
             6. Returns the termination and truncation status.
         """
+        pre_step_obs = self.obs
         self.robot_action = self.policy.forward(obs=self.obs)
 
         obs, _, terminated, truncated, info = self.env.step(self.robot_action, n_render_iterations=1)
@@ -218,6 +221,12 @@ class Evaluator:
 
         for metric in self.metrics:
             metric.step_callback(self.env)
+        self.a2c2_metrics.step_callback(
+            pre_obs=pre_step_obs,
+            post_obs=self.obs,
+            action=self.robot_action,
+            policy_info=getattr(self.policy, "last_info", None),
+        )
         return terminated, truncated
 
     @property
@@ -358,6 +367,7 @@ class Evaluator:
         for metric in self.metrics:
             metric.start_callback(self.env)
         self.policy.reset()
+        self.a2c2_metrics.reset()
         self.n_success_trials, self.n_trials = 0, 0
 
     def __enter__(self):
@@ -484,8 +494,19 @@ if __name__ == "__main__":
                 logger.info(f"Total trials: {evaluator.n_trials}")
                 logger.info(f"Total success trials: {evaluator.n_success_trials}")
                 # gather metric results and write to file
+                metrics = {}
                 for metric in evaluator.metrics:
                     metrics.update(metric.gather_results())
+                q_score_final = metrics.get("q_score", {}).get("final")
+                metrics.update(
+                    evaluator.a2c2_metrics.gather_results(
+                        success=evaluator.n_success_trials > 0,
+                        q_score_final=q_score_final,
+                        steps=evaluator.env._current_step,
+                        n_trials=evaluator.n_trials,
+                        n_success_trials=evaluator.n_success_trials,
+                    )
+                )
                 with open(metrics_path / f"{config.task.name}_{idx}_{epi}.json", "w") as f:
                     json.dump(metrics, f)
                 # reset video writer

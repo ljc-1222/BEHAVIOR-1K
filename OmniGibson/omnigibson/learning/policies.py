@@ -1,5 +1,6 @@
 import logging
 import torch as th
+from copy import deepcopy
 from omnigibson.learning.utils.array_tensor_utils import torch_to_numpy
 from omnigibson.learning.utils.network_utils import WebsocketClientPolicy
 from typing import Optional
@@ -53,12 +54,14 @@ class WebsocketPolicy:
     ) -> None:
         logging.info(f"Creating websocket client policy with host: {host}, port: {port}")
         self.last_action = None
+        self.last_info = {}
         self.policy = None
         if host is not None or port is not None:
             self.policy = WebsocketClientPolicy(host=host, port=port)
 
     def update_host(self, host: str, port: int) -> None:
         self.policy = WebsocketClientPolicy(host=host, port=port)
+        self.last_info = {}
 
     def forward(self, obs: dict, *args, **kwargs) -> th.Tensor:
         if "need_new_action" in obs and not obs["need_new_action"] and self.last_action is not None:
@@ -66,9 +69,11 @@ class WebsocketPolicy:
         # convert observation to numpy
         obs = torch_to_numpy(obs)
         self.last_action = self.policy.act(obs).detach().cpu()
+        self.last_info = deepcopy(self.policy.get_last_info())
         return self.last_action
 
     def reset(self) -> None:
         if self.policy is not None:
             self.policy.reset()
         self.last_action = None
+        self.last_info = {}

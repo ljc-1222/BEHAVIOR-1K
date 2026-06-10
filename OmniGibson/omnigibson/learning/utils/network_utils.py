@@ -46,9 +46,13 @@ class WebsocketClientPolicy:
         self._api_key = api_key
         self._ws, self._server_metadata = None, None
         self._allow_reconnect = allow_reconnect
+        self.last_info = {}
 
     def get_server_metadata(self) -> Dict:
         return self._server_metadata
+
+    def get_last_info(self) -> Dict:
+        return self.last_info
 
     def _wait_for_server(self) -> Tuple[websockets.sync.client.ClientConnection, Dict]:
         # TODO [Wensi]: use URL parser instead of this
@@ -120,6 +124,7 @@ class WebsocketClientPolicy:
             response = self._ws.recv()
             action_dict = unpackb(response)
             action_np = deepcopy(action_dict["action"])
+        self.last_info = {key: deepcopy(value) for key, value in action_dict.items() if key != "action"}
         action = th.from_numpy(action_np).to(th.float32)
         return action
 
@@ -127,6 +132,7 @@ class WebsocketClientPolicy:
         if self._ws is None:
             self._ws, self._server_metadata = self._wait_for_server()
 
+        self.last_info = {}
         data = self._packer.pack({"reset": True})
         self._ws.send(data)
 
@@ -191,6 +197,9 @@ class WebsocketPolicyServer:
                 action["server_timing"] = {
                     "infer_ms": infer_time * 1000,
                 }
+                a2c2_info = getattr(self._policy, "last_a2c2_info", None)
+                if a2c2_info is not None:
+                    action["a2c2"] = deepcopy(a2c2_info)
                 if prev_total_time is not None:
                     # We can only record the last total time since we also want to include the send time.
                     action["server_timing"]["prev_total_ms"] = prev_total_time * 1000
